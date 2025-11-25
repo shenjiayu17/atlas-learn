@@ -64,7 +64,6 @@ getSearchProcessor 方法返回的是一个处理器链，采用了责任链模�
     使用图查询处理分类属性（tagGraphQueryWithAttributes）
   - 根据条件选择最适合的查询方式
   - 通过分类顶点获取关联的实体顶点
-  - 实现空格过滤以避免不精确匹配
 
 ### 4.5 EntitySearchProcessor（实体搜索处理器）
 - 使用的工具：图数据库索引和查询
