@@ -20,19 +20,19 @@ org/apache/atlas/repository/graphdb/janus/AtlasJanusGraphDatabase.java
 
 **org/apache/atlas/repository/graph/GraphBackedSearchIndexer.java**
 
-负责图数据库的索引结构的管理：创建和维护索引结构，包括顶点索引、边索引和全文索引；维护属性键和索引字段之间的映射关系
+负责图数据库的索引结构的管理：创建和维护索引结构，包括顶点索引、边索引和全文索引；维护属性键和索引字段之间的映射关系。通过AtlasGraphManagement接口与底层的JanusGraph进行交互。
 
-通过AtlasGraphManagement接口与底层的JanusGraph进行交互。//需添加向量索引的创建/更新逻辑，处理向量字段
-
-1）initialize 创建三种主要索引：
+1）initialize(AtlasGraph graph) 创建三种主要索引：
 
 - VERTEX_INDEX：顶点混合索引
+
 - EDGE_INDEX：边混合索引
+
 - FULLTEXT_INDEX：全文索引
 
-然后为各种属性创建索引，如GUID、类型名称、时间戳等。
+  然后为各种属性创建indexField，如GUID、类型名称、时间戳等。
 
-2）onChange 负责更新索引结构
+2）onChange(ChangedTypeDefs changedTypeDefs) 负责更新索引结构
 
 `ChangedTypeDefs` 包含了 **类型系统（Type System）的变更**，包括：
 
@@ -44,34 +44,57 @@ org/apache/atlas/repository/graphdb/janus/AtlasJanusGraphDatabase.java
 
 `GraphBackedSearchIndexer#onChange(ChangedTypeDefs)` 的作用是：
 
-- 检测到类型定义变更后，
+- 检测到类型定义变更后，重建或更新搜索索引的 schema/mapping
 
-  重建或更新搜索索引的 schema/mapping
-
-  - 例如：在 Solr 中更新 `managed-schema`（添加/删除字段）
-  - 在 ES 中更新 index mapping（动态模板或显式字段）
-
-- 它**不直接更新实体数据索引内容**，而是更新索引的**结构**。
+  - 在 Solr 中更新 managed-schema（添加/删除字段）
+  - 在 ES 中更新 index mapping 
+  
+- 这里**不直接更新实体数据索引内容**，而是更新索引的结构
 
 3）JanusGraph图事务的自动同步
 
-- Atlas使用JanusGraph作为图数据库，当实体数据在图数据库中更新时，JanusGraph会自动将这些变更同步到配置的后端索引（如Elasticsearch）中
+- Atlas使用JanusGraph作为图数据库，当实体数据在图数据库中更新时，JanusGraph会自动将这些变更同步到配置的后端索引（如Elasticsearch）中。这种同步是通过JanusGraph的图事务机制实现的，在事务提交时触发索引更新
 
-- 这种同步是通过JanusGraph的事务机制实现的，在事务提交时自动触发索引更新
+4）IndexChangeListener接口实现，是onChange之外的补充操作
 
-4）SolrIndexHelper 类实现了IndexChangeListener接口，是onChange方法的补充操作。当类型定义发生变更时，先调用 `GraphBackedSearchIndexer#onChange` ，再调用` IndexChangeListener#onChange`
+当类型定义发生变更时，先调用 `GraphBackedSearchIndexer#onChange` ，再调用各个` IndexChangeListener#onChange`。
 
-SolrIndexHelper 主要负责处理Solr索引的搜索权重和建议字段配置。geIndexFieldNamesWithSearchWeights会收集所有需要设置搜索权重的索引字段。getIndexFieldNamesForSuggestions会收集搜索权重大于等于8的字段，用于搜索建议功能。
+```
+public class GraphBackedSearchIndexer implements SearchIndexer, ActiveStateChangeHandler, TypeDefChangeListener {
+	private final List<IndexChangeListener> indexChangeListeners = new ArrayList<>();
+	
+	public GraphBackedSearchIndexer() {
+        //make sure solr index follows graph backed index listener
+        addIndexListener(new SolrIndexHelper(typeRegistry));
+        ...
+	}
+	
+	private void notifyChangeListeners(ChangedTypeDefs changedTypeDefs) {
+        for (IndexChangeListener indexChangeListener : indexChangeListeners) {
+        	indexChangeListener.onChange(changedTypeDefs);
+        }
+    }
+}
 
-执行逻辑：1 获取图索引客户端，2 应用搜索权重配置，3 应用建议字段配置
+public class SolrIndexHelper implements IndexChangeListener {
+	@Override
+    public void onChange(ChangedTypeDefs changedTypeDefs) {
+    	//Solr索引需要的额外配置更新
+    }
+}
+```
 
+SolrIndexHelper 负责处理Solr索引的搜索权重和建议字段配置。geIndexFieldNamesWithSearchWeights会收集所有需要设置搜索权重的索引字段。getIndexFieldNamesForSuggestions会收集搜索权重大于等于8的字段，用于搜索建议功能。
+执行逻辑：1 获取图索引客户端，2 更新搜索权重配置，3 更新建议字段配置
 
 
 
 
 ### 2. 实现向量搜索处理器（新增）
 
-需要创建一个新的搜索处理器，类似于现有的`EntitySearchProcessor`，专门处理向量搜索。org/apache/atlas/discovery/VectorSearchProcessor.java  新增检索处理器
+需要创建一个新的搜索处理器，类似于现有的`EntitySearchProcessor`，专门处理向量搜索。
+
+org/apache/atlas/discovery/VectorSearchProcessor.java  新增检索处理器
 
 org/apache/atlas/discovery/SearchProcessor.java    在SearchProcessorFactory中添加向量搜索处理器的创建逻辑
 
@@ -169,7 +192,7 @@ client/client-v2/src/main/java/org/apache/atlas/AtlasClientV2.java  向量搜索
 
 - Atlas使用JanusGraph作为图数据库，支持Elasticsearch作为索引后端
 - 数组类型会被序列化为JSON字符串存储
-- 可以通过`createIndexForAttribute`方法为数组属性创建索引
+- 可以通过`createIndexForAttribute`方法为数组属性创建索引mapping
 
 ### 3. 实体类型定义
 
@@ -230,5 +253,6 @@ public List<VectorDocument> searchSimilarDocuments(float[] queryVector, int topK
         .collect(Collectors.toList());
 }
 ```
+
 
 
