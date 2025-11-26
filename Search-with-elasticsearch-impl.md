@@ -4,7 +4,7 @@
 
 从代码分析中可以看出：
 
-1. Atlas通过JanusGraph使用Elasticsearch作为索引后端，但支持的版本是5.6.4，这个版本对向量搜索的支持有限
+1. Atlas通过JanusGraph使用Elasticsearch作为索引后端，支持的版本要注意，是否支持向量搜索，是否需要升级
 2. 现有的搜索接口（如`AtlasGraph.indexQuery()`）虽然可以接受Elasticsearch查询DSL，但没有专门为向量搜索设计的API
 3. 现有的搜索处理器（如`EntitySearchProcessor`、`FullTextSearchProcessor`等）主要处理基于文本和属性的搜索，没有向量相似度计算逻辑
 
@@ -111,4 +111,5 @@ client/client-v2/src/main/java/org/apache/atlas/AtlasClientV2.java  向量搜索
 配置文件，atlas-application.properties
 
 测试用例，前端支持
+
 
