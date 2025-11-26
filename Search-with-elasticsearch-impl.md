@@ -53,7 +53,7 @@ org/apache/atlas/repository/graphdb/janus/AtlasJanusGraphDatabase.java
 
 - 它**不直接更新实体数据索引内容**，而是更新索引的**结构**。
 
-3）JanusGraph事务自动同步
+3）JanusGraph图事务的自动同步
 
 - Atlas使用JanusGraph作为图数据库，当实体数据在图数据库中更新时，JanusGraph会自动将这些变更同步到配置的后端索引（如Elasticsearch）中
 
@@ -230,4 +230,5 @@ public List<VectorDocument> searchSimilarDocuments(float[] queryVector, int topK
         .collect(Collectors.toList());
 }
 ```
+
 
