@@ -1,0 +1,122 @@
+@startuml complete_search_overview
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam componentFontSize 11
+skinparam packageFontSize 12
+skinparam noteFontSize 10
+skinparam roundcorner 10
+
+title <size:16>**Atlas 检索架构组件图**</size>
+
+package "第1层: REST API层\n(webapp模块)" as layer1 #E8F4FD {
+    component "DiscoveryREST\n<size:9>检索REST接口</size>" as rest #LightBlue
+    note right of rest
+    【职责】提供HTTP检索端点
+    端点列表:
+    - /v2/search/dsl (DSL查询)
+    - /v2/search/fulltext (全文检索)
+    - /v2/search/basic (基础检索)
+    - /v2/search/quick (快速检索)
+    - /v2/search/relationship (关系检索)
+    end note
+}
+
+package "第2层: 服务层\n(repository模块)" as layer2 #E8FDE8 {
+    interface "AtlasDiscoveryService\n<size:9>检索服务接口</size>" as discoveryInterface
+    component "EntityDiscoveryService\n<size:9>实体检索服务实现</size>" as discovery #LightGreen
+    
+    package "检索处理器组" as processors {
+        component "FullTextSearchProcessor\n<size:9>全文检索处理器</size>" as ftProcessor #90EE90
+        component "EntitySearchProcessor\n<size:9>实体属性检索处理器</size>" as entityProcessor #90EE90
+        component "ClassificationSearchProcessor\n<size:9>分类标签检索处理器</size>" as classProcessor #90EE90
+        component "FreeTextSearchProcessor\n<size:9>自由文本检索处理器</size>" as freeTextProcessor #90EE90
+        component "RelationshipSearchProcessor\n<size:9>关系检索处理器</size>" as relProcessor #90EE90
+    }
+    
+    component "SearchContext\n<size:9>检索上下文管理</size>" as context #98FB98
+    component "GraphIndexQueryBuilder\n<size:9>图索引查询构建器</size>" as queryBuilder #98FB98
+    component "EntityGraphRetriever\n<size:9>实体图数据读取器</size>" as retriever #98FB98
+}
+
+package "第3层: 图数据库API层\n(graphdb/api模块)" as layer3 #FFF8E8 {
+    interface "AtlasGraph<V,E>\n<size:9>图操作抽象接口</size>" as atlasGraph #Yellow
+    interface "AtlasIndexQuery<V,E>\n<size:9>索引查询抽象接口</size>" as atlasIndexQuery #Yellow
+    interface "AtlasGraphQuery<V,E>\n<size:9>图遍历查询抽象接口</size>" as atlasGraphQuery #Yellow
+    interface "AtlasGraphIndexClient\n<size:9>索引管理客户端接口</size>" as indexClient #Yellow
+    
+    note right of atlasGraph
+    【职责】定义图数据库抽象接口
+    核心方法:
+    - indexQuery() 创建索引查询
+    - query() 创建图遍历查询
+    - getGraphIndexClient() 获取索引客户端
+    end note
+}
+
+package "第4层: JanusGraph实现层\n(graphdb/janus模块)" as layer4 #FDE8E8 {
+    component "AtlasJanusGraph\n<size:9>AtlasGraph的JanusGraph实现</size>" as janusGraph #Pink
+    component "AtlasJanusIndexQuery\n<size:9>索引查询的JanusGraph实现</size>" as janusIndexQuery #Pink
+    component "AtlasJanusGraphQuery\n<size:9>图遍历的JanusGraph实现</size>" as janusGraphQuery #Pink
+    component "AtlasJanusGraphIndexClient\n<size:9>索引客户端的JanusGraph实现</size>" as janusIndexClient #Pink
+    
+    note right of janusGraph
+    【职责】JanusGraph具体实现
+    - 封装JanusGraph原生API
+    - 管理图连接和事务
+    - 委托索引查询给JanusGraphIndexQuery
+    end note
+}
+
+package "第5层: 索引后端\n(外部存储)" as layer5 #E8E8FD {
+    database "Solr\n(Solr6Index)\n<size:9>全文检索引擎</size>" as solr #LightBlue
+    database "Elasticsearch\n(ES7Index)\n<size:9>全文检索引擎</size>" as es #LightBlue
+    
+    note bottom of solr
+    【职责】提供全文检索能力
+    支持功能:
+    - 全文检索 (FullText)
+    - 聚合统计 (Aggregation)
+    - 自动建议 (Suggestion)
+    end note
+}
+
+' ===== 连接关系 =====
+' 第1层 -> 第2层
+rest --> discoveryInterface : 调用
+
+' 第2层内部
+discoveryInterface <|.. discovery : 实现
+discovery --> context : 创建上下文
+discovery --> retriever : 读取实体
+
+context --> ftProcessor : 构建处理器链
+context --> entityProcessor
+context --> classProcessor
+context --> freeTextProcessor
+context --> relProcessor
+
+ftProcessor --> queryBuilder : 构建查询
+entityProcessor --> queryBuilder
+
+' 第2层 -> 第3层
+queryBuilder --> atlasGraph : 调用接口
+retriever --> atlasGraph : 调用接口
+
+' 第3层 -> 第4层 (接口实现)
+atlasGraph <|.. janusGraph : 实现
+atlasIndexQuery <|.. janusIndexQuery : 实现
+atlasGraphQuery <|.. janusGraphQuery : 实现
+indexClient <|.. janusIndexClient : 实现
+
+' 第4层内部
+janusGraph --> janusIndexQuery : 创建
+janusGraph --> janusGraphQuery : 创建
+janusGraph --> janusIndexClient : 创建
+
+' 第4层 -> 第5层
+janusIndexQuery --> solr : 查询
+janusIndexQuery --> es : 查询
+janusIndexClient --> solr : 管理
+janusIndexClient --> es : 管理
+
+@enduml

@@ -1,0 +1,155 @@
+@startuml basic_search_sequence
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam noteFontSize 11
+skinparam participantFontSize 12
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 10
+skinparam sequenceLifeLineBorderColor #555555
+
+title <size:16>**Atlas 基础检索 (Basic Search) 时序图**</size>
+
+actor "客户端\nClient" as client #LightBlue
+box "第1层: REST API层 (webapp)" #E8F4FD
+    participant "DiscoveryREST\n<size:9>检索REST接口</size>" as rest
+end box
+box "第2层: 服务层 (repository)" #E8FDE8
+    participant "EntityDiscoveryService\n<size:9>实体检索服务</size>" as discovery
+    participant "SearchContext\n<size:9>检索上下文</size>" as context
+    participant "EntitySearchProcessor\n<size:9>实体检索处理器</size>" as entityProcessor
+    participant "ClassificationSearchProcessor\n<size:9>分类检索处理器</size>" as classProcessor
+end box
+box "第3层: API层 (graphdb/api)" #FFF8E8
+    participant "AtlasGraph\n<size:9>图数据库接口</size>" as graphApi
+end box
+box "第4层: 实现层 (graphdb/janus)" #FDE8E8
+    participant "AtlasJanusGraph\n<size:9>JanusGraph实现</size>" as janusGraph
+    participant "AtlasJanusIndexQuery\n<size:9>Janus索引查询</size>" as janusIndexQuery
+end box
+box "第5层: 索引后端" #E8E8FD
+    participant "Solr/ES\n<size:9>全文索引引擎</size>" as indexBackend
+end box
+
+== 步骤1: 发起基础检索请求 ==
+client -> rest : <b>1.1</b> POST /api/atlas/v2/search/basic (SearchParameters)
+note right: 【作用】客户端发送基础检索请求，包含类型、属性过滤条件
+activate rest #LightBlue
+
+== 步骤2: 调用检索服务 ==
+rest -> discovery : <b>2.1</b> searchWithParameters(searchParameters)
+note right: 【作用】REST层调用服务层执行检索
+activate discovery #LightGreen
+
+== 步骤3: 创建检索上下文 ==
+discovery -> context : <b>3.1</b> new SearchContext(typeRegistry, graph, searchParameters)
+note right: 【作用】创建检索上下文，解析检索参数
+activate context #LightGreen
+
+context -> context : <b>3.2</b> 初始化 entityTypes, classificationTypes
+note right: 【作用】解析要检索的实体类型和分类类型
+
+context -> context : <b>3.3</b> 确定搜索处理器链
+note right
+【作用】根据检索条件构建处理器链
+处理器执行顺序:
+1. FullTextSearchProcessor (有query关键词时)
+2. FreeTextSearchProcessor (自由文本检索)
+3. EntitySearchProcessor (实体属性检索)
+4. ClassificationSearchProcessor (分类过滤)
+end note
+
+context --> discovery : <b>3.4</b> 返回 searchContext
+deactivate context
+
+== 步骤4: 执行实体检索处理器 ==
+discovery -> entityProcessor : <b>4.1</b> execute()
+note right: 【作用】执行实体检索处理器
+activate entityProcessor #LightGreen
+
+entityProcessor -> entityProcessor : <b>4.2</b> 构建 indexQuery (VERTEX_INDEX)
+note right
+【作用】构建索引查询条件
+查询格式示例:
+- 类型过滤: __typeName:(hive_table OR hive_db)
+- 属性过滤: qualifiedName:(mydb*)
+- 状态过滤: __state:ACTIVE
+end note
+
+== 步骤5: 获取索引查询对象 ==
+entityProcessor -> graphApi : <b>5.1</b> indexQuery(VERTEX_INDEX, indexQueryString)
+note right: 【作用】调用图API创建顶点索引查询
+activate graphApi #Yellow
+
+graphApi -> janusGraph : <b>5.2</b> indexQuery(indexName, graphQuery, offset)
+note right: 【作用】委托给JanusGraph实现
+activate janusGraph #Pink
+
+janusGraph -> janusIndexQuery : <b>5.3</b> new AtlasJanusIndexQuery(graph, query)
+note right: 【作用】创建Janus索引查询实例
+janusGraph --> graphApi : <b>5.4</b> 返回 AtlasIndexQuery
+deactivate janusGraph
+
+graphApi --> entityProcessor : <b>5.5</b> 返回 AtlasIndexQuery
+deactivate graphApi
+
+== 步骤6: 执行索引查询 ==
+entityProcessor -> janusIndexQuery : <b>6.1</b> vertices(offset, limit, sortBy, sortOrder)
+note right: 【作用】执行带排序的分页索引查询
+activate janusIndexQuery #Pink
+
+janusIndexQuery -> indexBackend : <b>6.2</b> 执行排序索引查询
+note right: 【作用】向索引后端发送带排序的查询
+activate indexBackend #LightBlue
+
+indexBackend --> janusIndexQuery : <b>6.3</b> 返回匹配的顶点结果
+note right: 【作用】返回按指定字段排序的结果
+deactivate indexBackend
+
+janusIndexQuery --> entityProcessor : <b>6.4</b> Iterator<Result> 结果迭代器
+note right: 【作用】返回查询结果迭代器
+deactivate janusIndexQuery
+
+== 步骤7: 内存过滤 ==
+entityProcessor -> entityProcessor : <b>7.1</b> 内存过滤 (inMemoryPredicate)
+note right: 【作用】对结果进行内存中的二次过滤
+
+entityProcessor -> entityProcessor : <b>7.2</b> 收集结果顶点
+note right: 【作用】将过滤后的顶点收集到结果列表
+
+== 步骤8: 分类过滤 (可选) ==
+alt 有 Classification 过滤条件
+    entityProcessor -> classProcessor : <b>8.1</b> filter(offsetEntityVertexMap)
+    note right: 【作用】应用分类标签过滤
+    activate classProcessor #LightGreen
+    
+    classProcessor -> classProcessor : <b>8.2</b> 应用分类过滤条件
+    note right: 【作用】根据标签条件过滤实体
+    
+    classProcessor --> entityProcessor : <b>8.3</b> 返回过滤后的顶点
+    deactivate classProcessor
+end
+
+entityProcessor --> discovery : <b>8.4</b> List<AtlasVertex> 结果顶点列表
+note right: 【作用】返回最终过滤后的顶点列表
+deactivate entityProcessor
+
+== 步骤9: 转换结果 ==
+discovery -> discovery : <b>9.1</b> EntityGraphRetriever.toAtlasEntityHeader(vertex)
+note right
+【作用】将图顶点转换为实体头信息
+1. 读取顶点的GUID、名称、类型等属性
+2. 读取分类标签信息
+3. 构建AtlasEntityHeader对象
+end note
+
+== 步骤10: 返回检索结果 ==
+discovery --> rest : <b>10.1</b> AtlasSearchResult (包含 entities列表)
+note right: 【作用】返回封装的检索结果
+deactivate discovery
+
+rest --> client : <b>10.2</b> HTTP 200 + JSON响应
+note right: 【作用】返回JSON格式结果给客户端
+deactivate rest
+
+@enduml

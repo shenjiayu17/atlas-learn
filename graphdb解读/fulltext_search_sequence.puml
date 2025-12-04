@@ -1,0 +1,103 @@
+@startuml fulltext_search_sequence
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam noteFontSize 11
+skinparam participantFontSize 12
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 10
+skinparam sequenceLifeLineBorderColor #555555
+
+title <size:16>**Atlas 全文检索 (FullText Search) 时序图**</size>
+
+actor "客户端\nClient" as client #LightBlue
+box "第1层: REST API层 (webapp)" #E8F4FD
+    participant "DiscoveryREST\n<size:9>检索REST接口</size>" as rest
+end box
+box "第2层: 服务层 (repository)" #E8FDE8
+    participant "EntityDiscoveryService\n<size:9>实体检索服务</size>" as discovery
+end box
+box "第3层: API层 (graphdb/api)" #FFF8E8
+    participant "AtlasGraph\n<size:9>图数据库接口</size>" as graphApi
+end box
+box "第4层: 实现层 (graphdb/janus)" #FDE8E8
+    participant "AtlasJanusGraph\n<size:9>JanusGraph实现</size>" as janusGraph
+    participant "AtlasJanusIndexQuery\n<size:9>Janus索引查询</size>" as janusIndexQuery
+end box
+box "第5层: 索引后端" #E8E8FD
+    participant "Solr/ES\n<size:9>全文索引引擎</size>" as indexBackend
+end box
+
+== 步骤1: 发起全文检索请求 ==
+client -> rest : <b>1.1</b> GET /api/atlas/v2/search/fulltext?query=xxx
+note right: 【作用】客户端发送全文检索HTTP请求
+activate rest #LightBlue
+
+== 步骤2: 调用检索服务 ==
+rest -> discovery : <b>2.1</b> searchUsingFullTextQuery(query, limit, offset)
+note right: 【作用】REST层调用服务层执行检索
+activate discovery #LightGreen
+
+== 步骤3: 构建索引查询 ==
+discovery -> discovery : <b>3.1</b> toAtlasIndexQuery(fullTextQuery)
+note right
+【作用】构建全文索引查询字符串
+查询格式: v."__entityText":(<用户查询词>)
+使用索引: FULLTEXT_INDEX (全文索引)
+end note
+
+== 步骤4: 获取索引查询对象 ==
+discovery -> graphApi : <b>4.1</b> indexQuery(FULLTEXT_INDEX, graphQuery)
+note right: 【作用】调用图API创建索引查询对象
+activate graphApi #Yellow
+
+graphApi -> janusGraph : <b>4.2</b> indexQuery(indexName, graphQuery)
+note right: 【作用】委托给JanusGraph实现创建查询
+activate janusGraph #Pink
+
+janusGraph -> janusIndexQuery : <b>4.3</b> new AtlasJanusIndexQuery(graph, query)
+note right: 【作用】创建Janus索引查询实例
+activate janusIndexQuery #Pink
+
+janusGraph --> graphApi : <b>4.4</b> 返回 AtlasIndexQuery
+deactivate janusGraph
+
+graphApi --> discovery : <b>4.5</b> 返回 AtlasIndexQuery
+deactivate graphApi
+
+== 步骤5: 执行索引查询 ==
+discovery -> janusIndexQuery : <b>5.1</b> vertices()
+note right: 【作用】执行顶点检索，获取匹配的顶点迭代器
+
+janusIndexQuery -> indexBackend : <b>5.2</b> 执行Lucene/Solr/ES查询
+note right: 【作用】向索引后端发送查询请求
+activate indexBackend #LightBlue
+
+indexBackend --> janusIndexQuery : <b>5.3</b> 返回匹配的顶点ID列表及得分
+note right: 【作用】返回检索结果(顶点ID+相关性得分)
+deactivate indexBackend
+
+janusIndexQuery --> discovery : <b>5.4</b> Iterator<Result> 结果迭代器
+note right: 【作用】返回包装后的结果迭代器
+deactivate janusIndexQuery
+
+== 步骤6: 处理检索结果 ==
+discovery -> discovery : <b>6.1</b> getIndexQueryResults(idxQuery, params)
+note right
+【作用】处理检索结果
+1. 遍历结果迭代器
+2. 过滤已删除的实体
+3. 读取顶点属性转换为AtlasEntityHeader
+4. 记录每个结果的相关性得分
+end note
+
+== 步骤7: 返回检索结果 ==
+discovery --> rest : <b>7.1</b> AtlasSearchResult (包含fullTextResult)
+note right: 【作用】返回封装好的检索结果对象
+deactivate discovery
+
+rest --> client : <b>7.2</b> HTTP 200 + JSON响应
+note right: 【作用】返回JSON格式的检索结果给客户端
+deactivate rest
+
+@enduml
